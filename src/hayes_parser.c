@@ -3,32 +3,62 @@
 #include "stdlib.h"
 #include "string.h"
 
-hayes_parser *NewHayesParser() {
+hayes_parser *NewHayesParser(hayes_checker *checker) {
     hayes_parser *res = (hayes_parser *)malloc(sizeof(hayes_parser));
+    if (checker)
+        res->checker = checker;
+    else
+        res->checker = &gDefaultChecker;
 
     res->parse_resp = default_parse_result;
     return res;
 }
 
-void free_parser_result(parser_result *res) {
-    ListIterator *iter;
-    list_iterate(&res->resp, iter);
-    while (list_iter_has_more(iter)) {
-        ListValue *next = list_iter_next(iter);
+void _free_malloced_list(ListEntry *list) {
+    ListIterator iter;
+    list_iterate(&list, &iter);
+    while (list_iter_has_more(&iter)) {
+        ListValue *next = list_iter_next(&iter);
         free((range *)next);
     }
-    list_free(res->resp);
+
+    list_free(list);
 }
 
-parser_result *new_parser_result() {
+void ParseResultFree(parser_result *res) {
+    _free_malloced_list(res->resp);
+    free(res);
+}
+
+parser_result *NewParseResult() {
     parser_result *res = malloc(sizeof(parser_result));
     return res;
 }
 
-void default_parse_result(parser_result *res, const char *buf) {
+void res_reset(parser_result *self) {
+    _free_malloced_list(self->resp);
+    self->resp = NULL;
+}
+
+void default_parse_result(hayes_parser *self, parser_result *res,
+                          const char *buf) {
+    if (self->checker->is_empty(buf)) {
+        res->type = HAYES_RES_EMPTY;
+        return;
+    }
+    if (self->checker->is_ok(buf)) {
+        res->type = HAYES_RES_OK;
+        return;
+    }
+    if (self->checker->is_error(buf)) {
+        res->type = HAYES_RES_ERROR;
+        return;
+    }
+
     uint16_t fsm = 0;
     char ch;
     uint32_t cursor = 0;
+    res->type = HAYES_RES_RESP;
 
     while (buf[cursor] != '\0') {
         ch = buf[cursor];
@@ -52,6 +82,7 @@ void default_parse_result(parser_result *res, const char *buf) {
             case 2:
                 if (ch == ':') {
                     res->tag.sup = cursor;
+                    res->type = HAYES_RES_STDRESP;
                     fsm = 3;
                 }
                 break;
@@ -63,14 +94,16 @@ void default_parse_result(parser_result *res, const char *buf) {
                 fsm = 4;
                 break;
             }
-            case 4:
+            case 4: {
+                range *last =
+                    list_nth_data(res->resp, list_length(res->resp) - 1);
                 if (ch == ',' || ch == '\r') {
-                    uint16_t len = list_length(res->resp);
-                    range *last = list_data(list_nth_entry(res->resp, len - 1));
                     last->sup = cursor;
                     fsm = 3;
                 }
                 if (ch == '\r') fsm = 5;
+                break;
+            }
         }
         cursor++;
     }
