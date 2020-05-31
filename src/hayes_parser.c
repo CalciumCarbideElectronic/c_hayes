@@ -1,5 +1,14 @@
 #include "hayes_parser.h"
+
+#include "stdlib.h"
 #include "string.h"
+
+hayes_parser *NewHayesParser() {
+    hayes_parser *res = (hayes_parser *)malloc(sizeof(hayes_parser));
+
+    res->parse_resp = default_parse_result;
+    return res;
+}
 
 void free_parser_result(parser_result *res) {
     ListIterator *iter;
@@ -29,8 +38,8 @@ void default_parse_result(parser_result *res, const char *buf) {
                     fsm = 1;
                     break;
                 } else {
-                    res->tag.inf = -1;
-                    res->tag.sup = -1;
+                    res->tag.inf = 0;
+                    res->tag.sup = 0;
                     range *new_range = malloc(sizeof(range));
                     new_range->inf = cursor;
                     list_append(&res->resp, new_range);
@@ -47,7 +56,7 @@ void default_parse_result(parser_result *res, const char *buf) {
                 }
                 break;
             case 3: {
-                if( ch ==' ') break;
+                if (ch == ' ') break;
                 range *new_range = malloc(sizeof(range));
                 new_range->inf = cursor;
                 list_append(&res->resp, new_range);
@@ -55,16 +64,41 @@ void default_parse_result(parser_result *res, const char *buf) {
                 break;
             }
             case 4:
-                if (ch == ',') {
-                    range *last = list_data(
-                        list_nth_entry(res->resp, list_length(res->resp)));
+                if (ch == ',' || ch == '\r') {
+                    uint16_t len = list_length(res->resp);
+                    range *last = list_data(list_nth_entry(res->resp, len - 1));
                     last->sup = cursor;
                     fsm = 3;
                 }
+                if (ch == '\r') fsm = 5;
         }
         cursor++;
     }
-    range *last = list_data(list_nth_entry(res->resp, list_length(res->resp)));
+    uint16_t len = list_length(res->resp);
+
+    range *last = list_data(list_nth_entry(res->resp, len - 1));
     last->sup = cursor;
 }
 
+int read_range(char *dst, range _ran, const char *buf) {
+    if (_ran.inf == _ran.sup) return -1;
+
+    while (buf[_ran.inf] == ' ' || buf[_ran.inf] == '"') _ran.inf++;
+    while (buf[_ran.sup - 1] == ' ' || buf[_ran.sup - 1] == '"' ||
+           buf[_ran.sup - 1] == '\r' || buf[_ran.sup - 1] == '\n')
+        _ran.sup--;
+    memcpy(dst, buf + _ran.inf, _ran.sup - _ran.inf);
+    dst[_ran.sup - _ran.inf] = '\0';
+    return 0;
+}
+
+int res_read_nth(parser_result *res, char *dst, uint32_t n, const char *buf) {
+    if (n >= list_length(res->resp)) return -1;
+
+    range *data = (range *)list_nth_data(res->resp, n);
+    return read_range(dst, *data, buf);
+}
+
+int res_read_tag(parser_result *res, char *dst, const char *buf) {
+    return read_range(dst, res->tag, buf);
+}
