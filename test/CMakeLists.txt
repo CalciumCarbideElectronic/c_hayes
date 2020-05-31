@@ -13,7 +13,9 @@ file(GLOB C_CORE_SRCS ${PROJECT_SOURCE_DIR}/../third_party/c_core/src/*.c)
 add_executable(test_chayes
     main.cpp
     test_parser.cpp
+    test_checker.cpp
     ../src/hayes_parser.c
+    ../src/hayes_checker.c
     ${C_CORE_SRCS}
 )
 
