@@ -1,10 +1,10 @@
 #include "chayes.h"
 
 #ifdef UNITTEST
+#include "errno.h"
 #include "fcntl.h"
 #include "pthread.h"
 #include "time.h"
-#include "errno.h"
 #else
 #include "FreeRTOS_POSIX/fcntl.h"
 #include "FreeRTOS_POSIX/pthread.h"
@@ -24,15 +24,17 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
         singleton.urc_hooks = hash_table_new(string_hash, string_equal);
         singleton.parser = NewHayesParser(checker);
 
-        struct mq_attr resp_q_qttr = {.mq_flags = 0,
-                                      .mq_maxmsg = 20,
-                                      .mq_msgsize = sizeof(parser_result *),
-                                      .mq_curmsgs = 0};
+        struct mq_attr attr;
+        attr.mq_curmsgs = 0;
+        attr.mq_flags = 0;
+        attr.mq_maxmsg = 8;
+        attr.mq_msgsize = sizeof(parser_result *);
 
-        singleton.resp_q = mq_open("/respq",O_WRONLY|O_CREAT,0644, &resp_q_qttr);
+        singleton.resp_q =
+            mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0644, &attr);
 
-        if(singleton.resp_q==-1){
-            chayes_debug("mq_open failed, err: %s",strerror(errno));
+        if (singleton.resp_q == -1) {
+            chayes_debug("mq_open failed, err: %s\n", strerror(errno));
         }
 
         if (checker == NULL)
@@ -48,23 +50,36 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
 parser_result *send_timeout(control_ctx *self, const char *command,
                             uint64_t timeout) {
     static parser_result *res;
+    static mqd_t queue;
 
     parser_result *cached_res;
     res = NewParseResult();
 
     // set inflight_tag
+    self->inflight_tag[0] = 0;
     self->parser->parse_at_req(self->parser, res, command);
-    res_read_tag(res, self->inflight_tag, command);
+    if (res_read_tag(res, self->inflight_tag, command) == -1) {
+        return NULL;
+    }
     self->shim.send(command, timeout);
 
     // poll the resp queue
-    struct timespec interval = {
-        .tv_sec = timeout % 1000,
-        .tv_nsec = (timeout - 1000 * (timeout % 1000)) * 1000000};
+    struct timespec ddl;
+#ifdef UNITTEST
+    clock_gettime(CLOCK_REALTIME, &ddl);
+    ddl.tv_nsec += timeout * 1000000;
+    if (ddl.tv_nsec >= 1e9) {
+        long sec = ddl.tv_nsec % (long)1e9;
+        ddl.tv_nsec -= sec * (long)1e9;
+        ddl.tv_sec += sec;
+    }
+#endif
+
     while (1) {
-        uint8_t status = mq_timedreceive(self->resp_q, (char *)&res,
-                                         sizeof(parser_result *), 0, &interval);
-        if (status != 1) {
+        int rescode = mq_timedreceive(self->resp_q, (char *)&res,
+                                      sizeof(parser_result *), NULL, &ddl);
+        if (rescode == -1) {
+            chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
             self->inflight_tag[0] = 0;
             return NULL;
         } else {
@@ -104,8 +119,6 @@ void feed(control_ctx *self, const char *buf) {
     static parser_result *res;
     res = NewParseResult();
     self->parser->parse_resp(self->parser, res, buf);
-    
-    chayes_debug("receive feed: %s\n",buf);
 
     switch (res->type) {
         case HAYES_RES_STDRESP: {
@@ -129,9 +142,8 @@ void feed(control_ctx *self, const char *buf) {
                 break;
         }
         default: {
-            int status = mq_send(self->resp_q, (const char *)&res, sizeof(parser_result *),
-                    0);
-            chayes_debug("send ok to mq, status: %d\n",status);
+            int status = mq_send(self->resp_q, (const char *)&res,
+                                 sizeof(parser_result *), 0);
             break;
         }
     }

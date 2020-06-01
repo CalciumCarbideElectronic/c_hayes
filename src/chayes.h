@@ -16,6 +16,8 @@
 #ifndef C_HAYES_H_
 #define C_HAYES_H_
 
+#define CHAYES_QUEUE_NAME "/test_queue"
+
 typedef void (*urc_hook)(const char*);
 
 typedef struct control_ctx {
