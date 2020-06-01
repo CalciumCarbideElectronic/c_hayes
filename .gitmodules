@@ -1,3 +1,6 @@
 [submodule "third_party/c_core"]
 	path = third_party/c_core
 	url = git@github.com:CalciumCarbideElectronic/c_core.git
+[submodule "third_party/freertos_posix"]
+	path = third_party/freertos_posix
+	url = git@github.com:FreeRTOS/Lab-Project-FreeRTOS-POSIX.git
