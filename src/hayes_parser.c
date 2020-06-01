@@ -11,6 +11,7 @@ hayes_parser *NewHayesParser(hayes_checker *checker) {
         res->checker = &gDefaultChecker;
 
     res->parse_resp = default_parse_result;
+    res->parse_at_req = default_parse_at_req;
     return res;
 }
 
@@ -38,6 +39,48 @@ parser_result *NewParseResult() {
 void res_reset(parser_result *self) {
     _free_malloced_list(self->resp);
     self->resp = NULL;
+}
+
+void default_parse_at_req(hayes_parser *self, parser_result *res,
+                          const char *buf) {
+    res->type = HAYES_REQ;
+    res->tag.inf = 0;
+    res->tag.sup = 0;
+    uint32_t cursor = 0;
+    int fsm = 0;
+    while (buf[cursor] != 0) {
+        char ch = buf[cursor];
+        switch (fsm) {
+            case -1:
+                return;
+            case 0: {
+                fsm = (ch == 'A' || ch == 'a') ? 1 : -1;
+                break;
+            }
+            case 1: {
+                fsm = (ch == 'T' || ch == 't') ? 2 : -1;
+                break;
+            }
+            case 2: {
+                fsm = (ch == '+') ? 3 : -1;
+                break;
+            }
+            case 3: {
+                res->tag.inf = cursor;
+                fsm = 4;
+                break;
+            }
+            case 4: {
+                if (ch == ':' || ch == '?' || ch == '=') {
+                    res->tag.sup = cursor;
+                    return;
+                }
+                break;
+            }
+        }
+        cursor++;
+    }
+    res->tag.sup = cursor;
 }
 
 void default_parse_result(hayes_parser *self, parser_result *res,

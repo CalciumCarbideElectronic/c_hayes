@@ -16,7 +16,8 @@ enum result_type {
     HAYES_RES_OK,
     HAYES_RES_ERROR,
     HAYES_RES_STDRESP,
-    HAYES_RES_RESP
+    HAYES_RES_RESP,
+    HAYES_REQ,
 };
 
 typedef struct parser_result {
@@ -30,6 +31,9 @@ typedef struct hayes_parser {
     void (*parse_resp)(struct hayes_parser *self, parser_result *resp,
                        const char *buf);
 
+    void (*parse_at_req)(struct hayes_parser *self, parser_result *resp,
+                         const char *buf);
+
 } hayes_parser;
 
 hayes_parser *NewHayesParser(hayes_checker *checker);
@@ -38,6 +42,8 @@ parser_result *NewParseResult();
 void res_reset(parser_result *self);
 void ParseResultFree(parser_result *res);
 void default_parse_result(hayes_parser *self, parser_result *resp,
+                          const char *buf);
+void default_parse_at_req(hayes_parser *self, parser_result *res,
                           const char *buf);
 
 int read_range(char *dst, range _ran, const char *buf);

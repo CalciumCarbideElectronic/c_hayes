@@ -8,7 +8,7 @@ TEST(test_parser, response_standard) {
     hayes_parser *parser = NewHayesParser(NULL);
     parser_result *res = NewParseResult();
     const char *response = "+CGATT: 0,\"1\",test, 3 ,4\r\n";
-    parser->parse_resp(parser,res, response);
+    parser->parse_resp(parser, res, response);
     char buf[100];
     res_read_tag(res, buf, response);
     ASSERT_STREQ("CGATT", buf);
@@ -73,4 +73,20 @@ TEST(test_parser, response_type) {
     parser->parse_resp(parser, res, plain0);
     ASSERT_EQ(res->type, HAYES_RES_RESP);
     res_reset(res);
+}
+
+TEST(test_parser, request_tag) {
+    const char *cmd[4] = {"AT+CGATT: bla", "AT+CGATT?", "AT+CGATT=1",
+                          "AT+CGATT"};
+    char tagbuf[100];
+    hayes_parser *parser = NewHayesParser(NULL);
+    parser_result *res = NewParseResult();
+
+    for (int i = 0; i < 4; i++) {
+        parser->parse_at_req(parser, res, cmd[i]);
+        ASSERT_EQ(res->type, HAYES_REQ);
+        res_read_tag(res, tagbuf, cmd[i]);
+        ASSERT_STREQ(tagbuf, "CGATT");
+        res_reset(res);
+    }
 }
