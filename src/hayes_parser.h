@@ -21,6 +21,7 @@ enum result_type {
 };
 
 typedef struct parser_result {
+    char *raw_buf;
     enum result_type type;
     range tag;
     ListEntry *resp;
@@ -47,7 +48,7 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
                           const char *buf);
 
 int read_range(char *dst, range _ran, const char *buf);
-int res_read_nth(parser_result *res, char *dst, uint32_t n, const char *buf);
+int res_read_nth(parser_result *res, char *dst, uint32_t n);
 
-int res_read_tag(parser_result *res, char *dst, const char *buf);
+int res_read_tag(parser_result *res, char *dst);
 #endif

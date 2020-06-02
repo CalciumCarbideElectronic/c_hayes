@@ -3,6 +3,7 @@
 #ifdef UNITTEST
 #include "errno.h"
 #include "fcntl.h"
+#include "inttypes.h"
 #include "pthread.h"
 #include "time.h"
 #else
@@ -58,7 +59,7 @@ parser_result *send_timeout(control_ctx *self, const char *command,
     // set inflight_tag
     self->inflight_tag[0] = 0;
     self->parser->parse_at_req(self->parser, res, command);
-    if (res_read_tag(res, self->inflight_tag, command) == -1) {
+    if (res_read_tag(res, self->inflight_tag) == -1) {
         return NULL;
     }
     self->shim.send(command, timeout);
@@ -67,9 +68,9 @@ parser_result *send_timeout(control_ctx *self, const char *command,
     struct timespec ddl;
 #ifdef UNITTEST
     clock_gettime(CLOCK_REALTIME, &ddl);
-    ddl.tv_nsec += timeout * 1000000;
-    if (ddl.tv_nsec >= 1e9) {
-        long sec = ddl.tv_nsec % (long)1e9;
+    ddl.tv_nsec += timeout * 1e6;
+    if (ddl.tv_nsec >= 1e9 - 1) {
+        long sec = ddl.tv_nsec / (long)1e9;
         ddl.tv_nsec -= sec * (long)1e9;
         ddl.tv_sec += sec;
     }
@@ -122,7 +123,7 @@ void feed(control_ctx *self, const char *buf) {
 
     switch (res->type) {
         case HAYES_RES_STDRESP: {
-            res_read_tag(res, tag_buf, buf);
+            res_read_tag(res, tag_buf);
             if (string_equal(tag_buf, self->inflight_tag)) {
                 mq_send(self->resp_q, (const char *)&res,
                         sizeof(parser_result *), 0);
@@ -130,7 +131,7 @@ void feed(control_ctx *self, const char *buf) {
                 break;
             } else {
                 urc_hook hook = hash_table_lookup(self->urc_hooks, tag_buf);
-                hook(buf);
+                if (hook != NULL) hook(buf);
                 break;
             }
         }

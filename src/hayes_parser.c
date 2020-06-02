@@ -5,11 +5,13 @@
 
 hayes_parser *NewHayesParser(hayes_checker *checker) {
     hayes_parser *res = (hayes_parser *)malloc(sizeof(hayes_parser));
+
     if (checker)
         res->checker = checker;
     else
         res->checker = &gDefaultChecker;
 
+#include "hayes_parser.h"
     res->parse_resp = default_parse_result;
     res->parse_at_req = default_parse_at_req;
     return res;
@@ -28,21 +30,45 @@ void _free_malloced_list(ListEntry *list) {
 
 void ParseResultFree(parser_result *res) {
     _free_malloced_list(res->resp);
+    if (res->raw_buf != NULL) {
+        free(res->raw_buf);
+        res->raw_buf = NULL;
+    }
     free(res);
+}
+
+static void res_copy_buf(parser_result *res, const char *buf) {
+    if (res->raw_buf != NULL) {
+        free(res->raw_buf);
+        res->raw_buf = NULL;
+    }
+
+    res->raw_buf = (char *)malloc(strlen(buf) + 1);
+    strcpy(res->raw_buf, buf);
 }
 
 parser_result *NewParseResult() {
     parser_result *res = malloc(sizeof(parser_result));
+    res->raw_buf = NULL;
+    res->resp = NULL;
     return res;
 }
 
 void res_reset(parser_result *self) {
     _free_malloced_list(self->resp);
+    if (self->raw_buf != NULL) {
+        free(self->raw_buf);
+        self->raw_buf = NULL;
+    }
     self->resp = NULL;
 }
 
 void default_parse_at_req(hayes_parser *self, parser_result *res,
                           const char *buf) {
+    res_reset(res);
+
+    res_copy_buf(res, buf);
+
     res->type = HAYES_REQ;
     res->tag.inf = 0;
     res->tag.sup = 0;
@@ -85,6 +111,8 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
 
 void default_parse_result(hayes_parser *self, parser_result *res,
                           const char *buf) {
+    res_reset(res);
+    res_copy_buf(res, buf);
     if (self->checker->is_empty(buf)) {
         res->type = HAYES_RES_EMPTY;
         return;
@@ -168,13 +196,13 @@ int read_range(char *dst, range _ran, const char *buf) {
     return 0;
 }
 
-int res_read_nth(parser_result *res, char *dst, uint32_t n, const char *buf) {
+int res_read_nth(parser_result *res, char *dst, uint32_t n) {
     if (n >= list_length(res->resp)) return -1;
 
     range *data = (range *)list_nth_data(res->resp, n);
-    return read_range(dst, *data, buf);
+    return read_range(dst, *data, res->raw_buf);
 }
 
-int res_read_tag(parser_result *res, char *dst, const char *buf) {
-    return read_range(dst, res->tag, buf);
+int res_read_tag(parser_result *res, char *dst) {
+    return read_range(dst, res->tag, res->raw_buf);
 }
