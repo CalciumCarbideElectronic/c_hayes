@@ -131,16 +131,17 @@ void feed(control_ctx *self, const char *buf) {
                 break;
             } else {
                 urc_hook hook = hash_table_lookup(self->urc_hooks, tag_buf);
-                if (hook != NULL) hook(buf);
+                if (hook != NULL) {
+                    hook(buf);
+                }
                 break;
             }
         }
         case HAYES_RES_RESP: {
-            if (strlen(self->inflight_tag) > 0)
-                mq_send(self->resp_q, (const char *)&res,
-                        sizeof(parser_result *), 0);
-            else
-                break;
+            urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
+            if (hook != NULL) {
+                hook(buf);
+            }
         }
         default: {
             int status = mq_send(self->resp_q, (const char *)&res,
