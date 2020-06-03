@@ -118,7 +118,7 @@ TEST(test_core, test_plain_handle) {
         },
         ctx);
 
-    parser_result *res = send_timeout(ctx, "AT+CGATT\r\n", 200);
+    parser_result *res = send_timeout(ctx, "AT\r\n", 200);
     th_send_ok.join();
 
     ASSERT_EQ(URCHelper::hit_times("plain"), 2);

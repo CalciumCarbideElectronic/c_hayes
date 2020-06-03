@@ -88,6 +88,14 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
                 break;
             }
             case 2: {
+                if (ch == '\r') {
+                    res->tag.inf = cursor - 2;
+                    res->tag.sup = cursor;
+                    return;
+                }
+                if (ch == 'E') {
+                    fsm = 5;
+                }
                 fsm = (ch == '+') ? 3 : -1;
                 break;
             }
@@ -102,6 +110,13 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
                     return;
                 }
                 break;
+            }
+            case 5: {
+                if (ch == '\r') {
+                    res->tag.inf = cursor - 3;
+                    res->tag.sup = cursor;
+                    return;
+                }
             }
         }
         cursor++;

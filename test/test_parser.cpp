@@ -90,3 +90,19 @@ TEST(test_parser, request_tag) {
         res_reset(res);
     }
 }
+
+TEST(test_parser, special_request_tag) {
+    const char *cmd[2] = {"AT", "ATE"};
+    const char *resp[2] = {"AT", "ATE"};
+    char tagbuf[100];
+    hayes_parser *parser = NewHayesParser(NULL);
+    parser_result *res = NewParseResult();
+
+    for (int i = 0; i < 2; i++) {
+        parser->parse_at_req(parser, res, cmd[i]);
+        ASSERT_EQ(res->type, HAYES_REQ);
+        res_read_tag(res, tagbuf);
+        ASSERT_STREQ(tagbuf, resp[i]);
+        res_reset(res);
+    }
+}
