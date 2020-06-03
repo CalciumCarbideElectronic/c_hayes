@@ -33,6 +33,7 @@ typedef struct control_ctx {
 } control_ctx;
 
 control_ctx* NewControlCtx(syscall_shim shim, hayes_checker* checker);
+void ControlCtxFree(control_ctx* self);
 
 parser_result* send_timeout(control_ctx* self, const char* command,
                             uint64_t timeout);

@@ -10,35 +10,30 @@ class URCHelper {
    public:
     static std::unordered_map<std::string, URCHelper *> objs;
     URCHelper(std::string urc_tag);
+    static void reset() { objs.clear(); }
+    ~URCHelper() { URCHelper::reset(); }
+
+    static std::string parsekey(const char *buf) {
+        const std::regex re("^\\+(.+):");
+        std::smatch s_match;
+        auto buf_string = std::string(buf);
+
+        std::regex_search(buf_string, s_match, re);
+        if (s_match.size() < 2) return std::string();
+        auto sub_m = s_match[1];
+        return sub_m.str();
+    }
 
     static void hook(const char *buf, const char *objkey) {
-        printf("%s\n", buf);
-        printf("%s\n", objkey);
         auto recv = std::string(buf);
-        const std::regex re("^\\+(.+):");
 
-        auto buf_string = std::string(buf);
-        std::smatch s_match;
-        std::regex_search(buf_string, s_match, re);
+        std::string key = parsekey(buf);
 
-        std::string key;
-        printf("size:%d\n", s_match.size());
-
-        if (s_match.size() < 2) {
-            key = std::string("plain");
-        } else {
-            auto sub_m = s_match[1];
-            key = sub_m.str();
-        };
+        if (key.empty()) key = std::string("plain");
 
         auto obj = get_obj(objkey);
-        obj->received_stack.push(recv);
-        printf("key: %s objkey:%s,obj:%p\n", key.c_str(), objkey, obj);
 
-        if (key == objkey) {
-            printf("objkey: %s, times: %u\n", objkey, obj->mHitTimes);
-            obj->mHitTimes += 1;
-        }
+        if (key == std::string(objkey)) obj->mHitTimes += 1;
     }
 
     static uint64_t hit_times(const char *objkey) {

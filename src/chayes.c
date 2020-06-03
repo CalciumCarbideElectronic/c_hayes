@@ -19,33 +19,39 @@
 control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     static control_ctx singleton;
     static uint8_t init = 0;
-    if (init == 0) {
-        singleton.shim = shim;
 
-        singleton.urc_hooks = hash_table_new(string_hash, string_equal);
-        singleton.parser = NewHayesParser(checker);
+    if (init != 0) ControlCtxFree(&singleton);
 
-        struct mq_attr attr;
-        attr.mq_curmsgs = 0;
-        attr.mq_flags = 0;
-        attr.mq_maxmsg = 8;
-        attr.mq_msgsize = sizeof(parser_result *);
+    singleton.shim = shim;
 
-        singleton.resp_q =
-            mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0644, &attr);
+    singleton.urc_hooks = hash_table_new(string_hash, string_equal);
+    singleton.parser = NewHayesParser(checker);
 
-        if (singleton.resp_q == -1) {
-            chayes_debug("mq_open failed, err: %s\n", strerror(errno));
-        }
+    struct mq_attr attr;
+    attr.mq_curmsgs = 0;
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = 8;
+    attr.mq_msgsize = sizeof(parser_result *);
 
-        if (checker == NULL)
-            singleton.checker = &gDefaultChecker;
-        else
-            singleton.checker = checker;
+    singleton.resp_q =
+        mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0644, &attr);
 
-        init = 1;
+    if (singleton.resp_q == -1) {
+        chayes_debug("mq_open failed, err: %s\n", strerror(errno));
     }
+
+    if (checker == NULL)
+        singleton.checker = &gDefaultChecker;
+    else
+        singleton.checker = checker;
+
+    init = 1;
     return &singleton;
+}
+
+void ControlCtxFree(control_ctx *self) {
+    if (self->urc_hooks != NULL) hash_table_free(self->urc_hooks);
+    mq_close(self->resp_q);
 }
 
 parser_result *send_timeout(control_ctx *self, const char *command,
