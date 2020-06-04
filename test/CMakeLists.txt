@@ -18,7 +18,6 @@ add_executable(test_chayes
     test_checker.cpp
     test_core.cpp
     test_shim.c
-    urc_util.cpp
     ../src/hayes_parser.c
     ../src/hayes_checker.c
     ../src/chayes.c

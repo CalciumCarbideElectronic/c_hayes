@@ -95,17 +95,15 @@ TEST(test_core, test_urc_handle) {
     res_read_nth(res, resbuf, 1);
     ASSERT_STREQ(resbuf, "t");
 
-    ASSERT_TRUE(URCHelper::hit_times("FAKEURC") > 0);
-    URCHelper::reset();
+    ASSERT_EQ(fake_handler.hit_times("FAKEURC"), 1);
 }
 
 TEST(test_core, test_plain_handle) {
     struct syscall_shim shim = {.send = send_sync_urc};
     control_ctx *ctx = NewControlCtx(shim, NULL);
-
     URCHelper fake_handler(std::string("plain"));
-    auto hook = [](const char *buf) { URCHelper::hook(buf, "plain"); };
 
+    auto hook = [](const char *buf) { URCHelper::hook(buf, "plain"); };
     register_urc_hook(ctx, "plain", hook);
 
     std::thread th_send_ok(
@@ -121,6 +119,5 @@ TEST(test_core, test_plain_handle) {
     parser_result *res = send_timeout(ctx, "AT\r\n", 200);
     th_send_ok.join();
 
-    ASSERT_EQ(URCHelper::hit_times("plain"), 2);
-    URCHelper::reset();
+    ASSERT_EQ(fake_handler.hit_times(), 2);
 }
