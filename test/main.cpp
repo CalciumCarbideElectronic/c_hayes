@@ -2,18 +2,20 @@
 extern "C" {
 #include "semaphore.h"
 #include "test_shim.h"
+#include "mqueue.h"
+#include "../src/chayes.h"
 }
 
-class CHayes : public ::testing::Environment {
+class CHayesEnv : public ::testing::Environment {
+public:
     void TearDown() override {
-        printf("tear down\n");
         sem_unlink(CHAYES_URC_SEMAPHORE_NAME);
+        mq_unlink(CHAYES_QUEUE_NAME);
     }
     void SetUp() override {}
 };
 int main(int argc, char** argv) {
-    CHayes env;
-    //::testing::AddGlobalTestEnvironment(&env);
+    ::testing::AddGlobalTestEnvironment(new CHayesEnv  );
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

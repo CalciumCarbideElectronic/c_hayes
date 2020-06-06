@@ -34,7 +34,7 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     attr.mq_msgsize = sizeof(parser_result *);
 
     singleton.resp_q =
-        mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0644, &attr);
+        mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0777, &attr);
 
     if (singleton.resp_q == -1) {
         chayes_debug("mq_open failed, err: %s\n", strerror(errno));
