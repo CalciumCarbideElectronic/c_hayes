@@ -10,15 +10,17 @@
 #include "FreeRTOS_POSIX/fcntl.h"
 #include "FreeRTOS_POSIX/pthread.h"
 #include "FreeRTOS_POSIX/time.h"
+#include "FreeRTOS_POSIX/errno.h"
 #endif
 
-#include "compare-string.h"
-#include "hash-string.h"
+#include "c_core/src/compare-string.h"
+#include "c_core/src/hash-string.h"
 #include "string.h"
 
 control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     static control_ctx singleton;
     static uint8_t init = 0;
+    init_default_checker();
 
     if (init != 0) ControlCtxFree(&singleton);
 
@@ -59,7 +61,7 @@ parser_result *send_timeout(control_ctx *self, const char *command,
     static parser_result *res;
     static mqd_t queue;
 
-    parser_result *cached_res;
+    parser_result *cached_res=NULL;
     res = NewParseResult();
 
     // set inflight_tag
@@ -80,7 +82,16 @@ parser_result *send_timeout(control_ctx *self, const char *command,
         ddl.tv_nsec -= sec * (long)1e9;
         ddl.tv_sec += sec;
     }
+#else
+    clock_gettime(CLOCK_REALTIME, &ddl);
+    ddl.tv_nsec += timeout * 1e6;
+    if (ddl.tv_nsec >= 1e9 - 1) {
+        long sec = ddl.tv_nsec / (long)1e9;
+        ddl.tv_nsec -= sec * (long)1e9;
+        ddl.tv_sec += sec;
+    }
 #endif
+
 
     while (1) {
         int rescode = mq_timedreceive(self->resp_q, (char *)&res,
@@ -92,12 +103,20 @@ parser_result *send_timeout(control_ctx *self, const char *command,
         } else {
             switch (res->type) {
                 case HAYES_RES_OK: {
-                    self->inflight_tag[0] = 0;
+
                     if (cached_res != NULL) {
                         ParseResultFree(res);
+                        self->inflight_tag[0] = 0;
                         return cached_res;
                     } else {
-                        return res;
+
+                    	if(strcmp(self->inflight_tag,"AT")==0)
+                    		return res;
+
+                    	if(self->inflight_tag[0]!=0)
+                    		break;
+                    	else
+                    		return res;
                     }
                 }
                 case HAYES_RES_ERROR: {

@@ -1,7 +1,6 @@
-#include "hash-table.h"
+#include "c_core/src/hash-table.h"
 #include "hayes_checker.h"
 #include "hayes_parser.h"
-#include "queue.h"
 #include "shim.h"
 #include "stdint.h"
 
@@ -23,7 +22,6 @@ typedef void (*urc_hook)(const char*);
 typedef struct control_ctx {
     syscall_shim shim;
 
-    pthread_rwlock_t mu;
     mqd_t resp_q;
 
     HashTable* urc_hooks;

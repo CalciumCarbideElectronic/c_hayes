@@ -34,7 +34,7 @@ target_include_directories(
     test_chayes
     PUBLIC ${GTSEST_INCLUDE_DIRS}
     PUBLIC ../src/
-    PUBLIC ../third_party/c_core/src
+    PUBLIC ../third_party/
 )
 
 target_link_libraries(
