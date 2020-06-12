@@ -141,6 +141,7 @@ void default_parse_result(hayes_parser *self, parser_result *res,
         return;
     }
 
+
     uint16_t fsm = 0;
     char ch;
     uint32_t cursor = 0;
@@ -211,11 +212,16 @@ int read_range(char *dst, range _ran, const char *buf) {
     return 0;
 }
 
-int res_read_nth(parser_result *res, char *dst, uint32_t n) {
-    if (n >= list_length(res->resp)) return -1;
+int res_read_nth(parser_result *ares, char *dst, uint32_t n) {
+    //TODO: when we try to read content in a HAYES_OK response, the list entry, ares->resp will be an invalid pointer which 
+    //lead to memory leak in list_nth_data function which treat only NULL pointer as empty. 
+    //We need to find why we get non-null value here.
+    if(ares->type!=HAYES_RES_STDRESP) return -1;
 
-    range *data = (range *)list_nth_data(res->resp, n);
-    return read_range(dst, *data, res->raw_buf);
+    if (n >= list_length(ares->resp)) return -1;
+
+    range *data = (range *)list_nth_data(ares->resp, n);
+    return read_range(dst, *data, ares->raw_buf);
 }
 
 int res_read_tag(parser_result *res, char *dst) {

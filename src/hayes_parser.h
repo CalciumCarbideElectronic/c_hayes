@@ -1,5 +1,5 @@
 #include "hayes_checker.h"
-#include "list.h"
+#include "c_core/src/list.h"
 #include "stdint.h"
 #include "stdlib.h"
 
@@ -23,16 +23,16 @@ enum result_type {
 typedef struct parser_result {
     char *raw_buf;
     enum result_type type;
-    range tag;
+    struct range tag;
     ListEntry *resp;
 } parser_result;
 
 typedef struct hayes_parser {
     hayes_checker *checker;
-    void (*parse_resp)(struct hayes_parser *self, parser_result *resp,
+    void (*parse_resp)( struct hayes_parser *self, parser_result *resp,
                        const char *buf);
 
-    void (*parse_at_req)(struct hayes_parser *self, parser_result *resp,
+    void (*parse_at_req)( struct hayes_parser *self, parser_result *resp,
                          const char *buf);
 
 } hayes_parser;
