@@ -17,6 +17,7 @@ uint8_t chayes_is_ok(const char * buf);
 uint8_t chayes_is_error(const char * buf);
 uint8_t chayes_is_response(const char * buf);
 uint8_t chayes_is_stdresp(const char *buf);
+void init_default_checker();
 
 extern  hayes_checker gDefaultChecker;
 

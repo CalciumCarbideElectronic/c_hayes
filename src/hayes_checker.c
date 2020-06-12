@@ -1,6 +1,6 @@
 #include "hayes_checker.h"
 
-#include "compare-string.h"
+#include "c_core/src/compare-string.h"
 #include "string.h"
 
 hayes_checker gDefaultChecker = {.is_empty = chayes_is_empty,
@@ -8,12 +8,20 @@ hayes_checker gDefaultChecker = {.is_empty = chayes_is_empty,
                                  .is_error = chayes_is_error,
                                  .is_response = chayes_is_response,
                                  .is_stdresp = chayes_is_stdresp};
+void init_default_checker(){
+	gDefaultChecker.is_empty =chayes_is_empty;
+	gDefaultChecker.is_ok = chayes_is_ok;
+	gDefaultChecker.is_error = chayes_is_error;
+	gDefaultChecker.is_response = chayes_is_response;
+	gDefaultChecker.is_stdresp = chayes_is_stdresp;
 
+
+}
 uint8_t chayes_is_empty(const char *buf) {
     return strlen(buf) == 0 || string_equal((void *)buf, "\r\n");
 }
 uint8_t chayes_is_ok(const char *buf) {
-    return string_nocase_equal((void *)"OK\r\n", (void *)buf);
+    return string_equal((void *)"OK\r\n", (void *)buf);
 }
 uint8_t chayes_is_error(const char *buf) {
     return strstr(buf, "+CME ERROR:") != NULL;
