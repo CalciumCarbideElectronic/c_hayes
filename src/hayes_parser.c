@@ -29,12 +29,14 @@ void _free_malloced_list(ListEntry *list) {
 }
 
 void ParseResultFree(parser_result *res) {
+    if(res == NULL) return;
     _free_malloced_list(res->resp);
     if (res->raw_buf != NULL) {
         free(res->raw_buf);
         res->raw_buf = NULL;
     }
     free(res);
+    res = NULL;
 }
 
 static void res_copy_buf(parser_result *res, const char *buf) {

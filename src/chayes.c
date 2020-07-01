@@ -7,10 +7,10 @@
 #include "pthread.h"
 #include "time.h"
 #else
+#include "FreeRTOS_POSIX/errno.h"
 #include "FreeRTOS_POSIX/fcntl.h"
 #include "FreeRTOS_POSIX/pthread.h"
 #include "FreeRTOS_POSIX/time.h"
-#include "FreeRTOS_POSIX/errno.h"
 #endif
 
 #include "c_core/src/compare-string.h"
@@ -58,23 +58,28 @@ void ControlCtxFree(control_ctx *self) {
 
 parser_result *send_timeout(control_ctx *self, const char *command,
                             uint64_t timeout) {
-    static parser_result *res;
     static mqd_t queue;
+    static parser_result *tres;
 
-    parser_result *cached_res=NULL;
-    res = NewParseResult();
+    parser_result *cached_res = NULL;
 
     // set inflight_tag
+    tres = NewParseResult();
     self->inflight_tag[0] = 0;
-    self->parser->parse_at_req(self->parser, res, command);
-    if (res_read_tag(res, self->inflight_tag) == -1) {
+    self->parser->parse_at_req(self->parser, tres, command);
+    if (res_read_tag(tres, self->inflight_tag) == -1) {
+        ParseResultFree(tres);
         return NULL;
     }
+    ParseResultFree(tres);
+
+    // send AT command
+
     self->shim.send(command, timeout);
 
     // poll the resp queue
+    // 1. set time out
     struct timespec ddl;
-#ifdef UNITTEST
     clock_gettime(CLOCK_REALTIME, &ddl);
     ddl.tv_nsec += timeout * 1e6;
     if (ddl.tv_nsec >= 1e9 - 1) {
@@ -82,75 +87,61 @@ parser_result *send_timeout(control_ctx *self, const char *command,
         ddl.tv_nsec -= sec * (long)1e9;
         ddl.tv_sec += sec;
     }
-#else
-    clock_gettime(CLOCK_REALTIME, &ddl);
-    ddl.tv_nsec += timeout * 1e6;
-    if (ddl.tv_nsec >= 1e9 - 1) {
-        long sec = ddl.tv_nsec / (long)1e9;
-        ddl.tv_nsec -= sec * (long)1e9;
-        ddl.tv_sec += sec;
-    }
-#endif
 
+    // 2.poll
 
     while (1) {
-        int rescode = mq_timedreceive(self->resp_q, (char *)&res,
+        int rescode = mq_timedreceive(self->resp_q, (char *)&tres,
                                       sizeof(parser_result *), NULL, &ddl);
         if (rescode == -1) {
             chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
             self->inflight_tag[0] = 0;
             return NULL;
         } else {
-            switch (res->type) {
+            switch (tres->type) {
                 case HAYES_RES_OK: {
-
                     if (cached_res != NULL) {
-                        ParseResultFree(res);
+                        ParseResultFree(tres);
                         self->inflight_tag[0] = 0;
                         return cached_res;
                     } else {
-
-                    	if(strcmp(self->inflight_tag,"AT")==0)
-                    		return res;
-
-                    	if(self->inflight_tag[0]!=0)
-                    		break;
-                    	else
-                    		return res;
+                        return tres;
                     }
                 }
                 case HAYES_RES_ERROR: {
                     self->inflight_tag[0] = 0;
-                    return res;
+                    return tres;
                 }
                 case HAYES_RES_EMPTY:
                 case HAYES_REQ: {
+                    ParseResultFree(tres);
                     break;
                 }
                 case HAYES_RES_RESP:
                 case HAYES_RES_STDRESP: {
-                    cached_res = res;
+                    cached_res = tres;
+                    break;
+                }
+                default:{
+                    ParseResultFree(tres);
                     break;
                 }
             }
         }
     }
-
-    ParseResultFree(res);
-    return NULL;
 }
 
 void feed(control_ctx *self, const char *buf) {
     static char tag_buf[30];
-    static parser_result *res;
-    res = NewParseResult();
-    self->parser->parse_resp(self->parser, res, buf);
+    static parser_result *tres;
+    tres = NewParseResult();
+    self->parser->parse_resp(self->parser, tres, buf);
 
-    switch (res->type) {
+    switch (tres->type) {
         case HAYES_RES_STDRESP: {
-            res_read_tag(res, tag_buf);
+            res_read_tag(tres, tag_buf);
             if (string_equal(tag_buf, self->inflight_tag)) {
-                mq_send(self->resp_q, (const char *)&res,
+                mq_send(self->resp_q, (const char *)&tres,
                         sizeof(parser_result *), 0);
 
                 break;
@@ -159,6 +150,7 @@ void feed(control_ctx *self, const char *buf) {
                 if (hook != NULL) {
                     hook(buf);
                 }
+                ParseResultFree(tres);
                 break;
             }
         }
@@ -167,9 +159,11 @@ void feed(control_ctx *self, const char *buf) {
             if (hook != NULL) {
                 hook(buf);
             }
+            ParseResultFree(tres);
+            break;
         }
         default: {
-            int status = mq_send(self->resp_q, (const char *)&res,
+            int status = mq_send(self->resp_q, (const char *)&tres,
                                  sizeof(parser_result *), 0);
             break;
         }
@@ -184,3 +178,38 @@ void unregister_urc_hook(control_ctx *self, const char *urc) {
     hash_table_remove(self->urc_hooks, (void *)urc);
 }
 
+enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
+                               uint16_t maxtimes, struct timespec *interval) {
+    enum result_type ttype;
+    parser_result *tres;
+    while (1) {
+        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
+        tres = send_timeout(ctx, command, 200);
+        if (tres->type == HAYES_RES_OK) return CHAYES_OK;
+        nanosleep(interval, NULL);
+    }
+}
+
+
+enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
+                               uint16_t maxtimes, struct timespec *interval,uint16_t flag_idx) {
+    char flag = '0';
+    char tagbuf[10];
+    parser_result *tres;
+    
+    while (1) {
+        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
+
+        tres = send_timeout(ctx, command, 200);
+        if(res_read_nth(tres,tagbuf,flag_idx)!=-1)
+            if(*tagbuf == '1')
+                return CHAYES_OK;
+
+        nanosleep(interval, NULL);
+    }
+}
+
+void send_without_res(control_ctx *ctx, const char *command) {
+    parser_result * res = send_timeout(ctx,command,1000);
+    ParseResultFree(res);
+}
