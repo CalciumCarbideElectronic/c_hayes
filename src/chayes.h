@@ -36,18 +36,24 @@ typedef struct control_ctx {
 } control_ctx;
 
 control_ctx* NewControlCtx(syscall_shim shim, hayes_checker* checker);
+
 void ControlCtxFree(control_ctx* self);
 
-parser_result * send_timeout(control_ctx* self, const char* command,
-                            uint64_t timeout);
+
 void register_urc_hook(control_ctx* self, const char* urc, urc_hook hook);
 void unregister_urc_hook(control_ctx* self, const char* urc);
+
 void feed(control_ctx* self, const char* buf);
+
 
 enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
                                uint16_t maxtimes, struct timespec *interval) ;
 enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
                                uint16_t maxtimes, struct timespec *interval,uint16_t flag_idx) ;
 void send_without_res(control_ctx *ctx, const char *command) ;
+
+parser_result * send_timeout(control_ctx* self, const char* command,
+                            uint64_t timeout);
+
 #endif
 

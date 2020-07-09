@@ -56,81 +56,6 @@ void ControlCtxFree(control_ctx *self) {
     mq_close(self->resp_q);
 }
 
-parser_result *send_timeout(control_ctx *self, const char *command,
-                            uint64_t timeout) {
-    static mqd_t queue;
-    static parser_result *tres;
-
-    parser_result *cached_res = NULL;
-
-    // set inflight_tag
-    tres = NewParseResult();
-    self->inflight_tag[0] = 0;
-    self->parser->parse_at_req(self->parser, tres, command);
-    if (res_read_tag(tres, self->inflight_tag) == -1) {
-        ParseResultFree(tres);
-        return NULL;
-    }
-    ParseResultFree(tres);
-
-    // send AT command
-
-    self->shim.send(command, timeout);
-
-    // poll the resp queue
-    // 1. set time out
-    struct timespec ddl;
-    clock_gettime(CLOCK_REALTIME, &ddl);
-    ddl.tv_nsec += timeout * 1e6;
-    if (ddl.tv_nsec >= 1e9 - 1) {
-        long sec = ddl.tv_nsec / (long)1e9;
-        ddl.tv_nsec -= sec * (long)1e9;
-        ddl.tv_sec += sec;
-    }
-
-    // 2.poll
-
-    while (1) {
-        int rescode = mq_timedreceive(self->resp_q, (char *)&tres,
-                                      sizeof(parser_result *), NULL, &ddl);
-        if (rescode == -1) {
-            chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
-            self->inflight_tag[0] = 0;
-            return NULL;
-        } else {
-            switch (tres->type) {
-                case HAYES_RES_OK: {
-                    if (cached_res != NULL) {
-                        ParseResultFree(tres);
-                        self->inflight_tag[0] = 0;
-                        return cached_res;
-                    } else {
-                        return tres;
-                    }
-                }
-                case HAYES_RES_ERROR: {
-                    self->inflight_tag[0] = 0;
-                    return tres;
-                }
-                case HAYES_RES_EMPTY:
-                case HAYES_REQ: {
-                    ParseResultFree(tres);
-                    break;
-                }
-                case HAYES_RES_RESP:
-                case HAYES_RES_STDRESP: {
-                    cached_res = tres;
-                    break;
-                }
-                default:{
-                    ParseResultFree(tres);
-                    break;
-                }
-            }
-        }
-    }
-}
-
 void feed(control_ctx *self, const char *buf) {
     static char tag_buf[30];
     static parser_result *tres;
@@ -141,20 +66,25 @@ void feed(control_ctx *self, const char *buf) {
         case HAYES_RES_STDRESP: {
             res_read_tag(tres, tag_buf);
             if (string_equal(tag_buf, self->inflight_tag)) {
+                //receive response of command sent most recently.
+                //It's downstream function, the send_timeout command, should free the res memory.
                 mq_send(self->resp_q, (const char *)&tres,
                         sizeof(parser_result *), 0);
 
                 break;
             } else {
+                //response with standard structure but not match to the tag, may be an URC.
                 urc_hook hook = hash_table_lookup(self->urc_hooks, tag_buf);
                 if (hook != NULL) {
                     hook(buf);
                 }
+                //We do not know whether the hook will free the res or not, just free it again.
                 ParseResultFree(tres);
                 break;
             }
         }
         case HAYES_RES_RESP: {
+            //plain response, use a special URC Hooks.
             urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
             if (hook != NULL) {
                 hook(buf);
@@ -163,6 +93,7 @@ void feed(control_ctx *self, const char *buf) {
             break;
         }
         default: {
+            //Unknown type, just forward to the downstream.
             int status = mq_send(self->resp_q, (const char *)&tres,
                                  sizeof(parser_result *), 0);
             break;
@@ -212,4 +143,84 @@ enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
 void send_without_res(control_ctx *ctx, const char *command) {
     parser_result * res = send_timeout(ctx,command,1000);
     ParseResultFree(res);
+}
+
+parser_result *send_timeout(control_ctx *self, const char *command,
+                            uint64_t timeout) {
+    static mqd_t queue;
+    static parser_result *tres;
+
+    parser_result *cached_res = NULL;
+
+    // set inflight_tag
+    tres = NewParseResult();
+    self->inflight_tag[0] = 0;
+    self->parser->parse_at_req(self->parser, tres, command);
+    if (res_read_tag(tres, self->inflight_tag) == -1) {
+        ParseResultFree(tres);
+        return NULL;
+    }
+    ParseResultFree(tres);
+
+    // send AT command
+
+    self->shim.send(command, timeout);
+
+    // poll the resp queue
+    // 1. set time out
+    struct timespec ddl;
+    clock_gettime(CLOCK_REALTIME, &ddl);
+    ddl.tv_nsec += timeout * 1e6;
+    if (ddl.tv_nsec >= 1e9 - 1) {
+        long sec = ddl.tv_nsec / (long)1e9;
+        ddl.tv_nsec -= sec * (long)1e9;
+        ddl.tv_sec += sec;
+    }
+
+    // 2.poll
+
+    while (1) {
+        int rescode = mq_timedreceive(self->resp_q, (char *)&tres,
+                                      sizeof(parser_result *), NULL, &ddl);
+        if (rescode == -1) {
+            chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
+            self->inflight_tag[0] = 0;
+            return NULL;
+        } else {
+            switch (tres->type) {
+                case HAYES_RES_OK: {
+                    self->inflight_tag[0] = 0;
+                    if (cached_res != NULL) {
+                        //free OK response just received and return the real cached response.
+                        ParseResultFree(tres);
+                        return cached_res;
+                    } else {
+                        //The command we sent only have OK response.Return it.
+                        return tres;
+                    }
+                }
+                case HAYES_RES_ERROR: {
+                    self->inflight_tag[0] = 0;
+                    return tres;
+                }
+                case HAYES_RES_EMPTY:
+                case HAYES_REQ: {
+                    ParseResultFree(tres);
+                    break;
+                }
+                // Actually, we can only get standard response here. 
+                // After receiving standard response, we should wait for OK.
+                case HAYES_RES_RESP:
+                case HAYES_RES_STDRESP: {
+                    cached_res = tres;
+                    break;
+                }
+                //unknown response, just free it.
+                default:{
+                    ParseResultFree(tres);
+                    break;
+                }
+            }
+        }
+    }
 }
