@@ -17,6 +17,10 @@
 #include "c_core/src/hash-string.h"
 #include "string.h"
 
+static parser_result *_unsafe_send_timeout(control_ctx *self,
+                                           const char *command,
+                                           uint64_t timeout);
+
 control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     static control_ctx singleton;
     static uint8_t init = 0;
@@ -27,11 +31,11 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     singleton.shim = shim;
 
     singleton.urc_hooks = hash_table_new(string_hash, string_equal);
+    singleton.command_hooks = hash_table_new(string_hash, string_equal);
 
     singleton.parser = NewHayesParser(checker);
 
-    pthread_mutex_init(&singleton.mu,NULL);
-
+    pthread_mutex_init(&singleton.mu, NULL);
 
     struct mq_attr attr;
     attr.mq_curmsgs = 0;
@@ -121,6 +125,18 @@ void unregister_urc_hook(control_ctx *self, const char *urc) {
     pthread_mutex_unlock(&self->mu);
 }
 
+void register_command_hook(control_ctx *self, const char *cmd, cmd_hook hook) {
+    pthread_mutex_lock(&self->mu);
+    hash_table_insert(self->command_hooks, (void *)cmd, (void *)hook);
+    pthread_mutex_unlock(&self->mu);
+}
+
+void unregister_command_hook(control_ctx *self, const char *cmd) {
+    pthread_mutex_lock(&self->mu);
+    hash_table_remove(self->command_hooks, (void *)cmd);
+    pthread_mutex_unlock(&self->mu);
+}
+
 enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
                                uint16_t maxtimes, struct timespec *interval) {
     enum result_type ttype;
@@ -157,13 +173,13 @@ void send_without_res(control_ctx *ctx, const char *command) {
     ParseResultFree(res);
 }
 
-parser_result *send_timeout(control_ctx *self, const char *command,
-                            uint64_t timeout) {
+static parser_result *_unsafe_send_timeout(control_ctx *self,
+                                           const char *command,
+                                           uint64_t timeout) {
     static mqd_t queue;
     static parser_result *tres;
 
     parser_result *output = NULL;
-    pthread_mutex_lock(&self->mu);
 
     parser_result *cached_res = NULL;
 
@@ -232,6 +248,9 @@ parser_result *send_timeout(control_ctx *self, const char *command,
                 // After receiving standard response, we should wait for OK.
                 case HAYES_RES_RESP:
                 case HAYES_RES_STDRESP: {
+                    cmd_hook hook = hash_table_lookup(self->command_hooks,
+                                                      self->inflight_tag);
+                    if (hook != NULL) hook(tres->raw_buf);
                     cached_res = tres;
                     break;
                 }
@@ -245,6 +264,15 @@ parser_result *send_timeout(control_ctx *self, const char *command,
     }
 
 end_send:
-    pthread_mutex_unlock(&self->mu);
     return output;
 }
+
+parser_result *send_timeout(control_ctx *self, const char *command,
+                            uint64_t timeout) {
+    parser_result *res;
+    pthread_mutex_lock(&self->mu);
+    res = _unsafe_send_timeout(self, command, timeout);
+    pthread_mutex_unlock(&self->mu);
+    return res;
+}
+

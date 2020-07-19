@@ -121,3 +121,27 @@ TEST(test_core, test_plain_handle) {
 
     ASSERT_EQ(fake_handler.hit_times(), 2);
 }
+
+TEST(test_core, test_cmd_hooks) {
+    char resbuf[30];
+    struct syscall_shim shim = {.send = send_sync_urc};
+    control_ctx *ctx = NewControlCtx(shim, NULL);
+
+    URCHelper fake_handler(std::string("ATCMD"));
+    auto hook = [](const char *buf) { URCHelper::hook(buf, "ATCMD"); };
+
+    register_command_hook(ctx, "ATCMD", hook);
+
+    std::thread th_send_ok(
+        [&](control_ctx *hctx) {
+            wait_for_urc_semaphore();
+            feed(hctx, "+ATCMD: 1\r\n");
+            feed(hctx, "OK\r\n");
+        },
+        ctx);
+
+    parser_result *res = send_timeout(ctx, "AT+ATCMD\r\n", 200);
+    th_send_ok.join();
+
+    ASSERT_EQ(fake_handler.hit_times("ATCMD"), 1);
+}
