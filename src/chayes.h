@@ -1,8 +1,8 @@
-#include "c_core/src/hash-table.h"
 #include "hayes_checker.h"
 #include "hayes_parser.h"
 #include "shim.h"
 #include "stdint.h"
+#include "c_core/src/hash-table.h"
 
 #ifdef UNITTEST
 #include "mqueue.h"
@@ -29,9 +29,11 @@ typedef struct control_ctx {
 
     mqd_t resp_q;
 
+    pthread_mutex_t mu;
     HashTable* urc_hooks;
     hayes_checker* checker;
     hayes_parser* parser;
+
     char inflight_tag[30];
 } control_ctx;
 

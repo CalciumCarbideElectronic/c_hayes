@@ -1,5 +1,6 @@
 -std=c11
 -I./include
 -I./third_party/
+-I./third_party/
 -I./third_party/freertos_posix/include/
 -DUNITTEST

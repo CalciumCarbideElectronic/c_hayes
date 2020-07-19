@@ -11,7 +11,6 @@ hayes_parser *NewHayesParser(hayes_checker *checker) {
     else
         res->checker = &gDefaultChecker;
 
-#include "hayes_parser.h"
     res->parse_resp = default_parse_result;
     res->parse_at_req = default_parse_at_req;
     return res;

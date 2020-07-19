@@ -27,7 +27,11 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     singleton.shim = shim;
 
     singleton.urc_hooks = hash_table_new(string_hash, string_equal);
+
     singleton.parser = NewHayesParser(checker);
+
+    pthread_mutex_init(&singleton.mu,NULL);
+
 
     struct mq_attr attr;
     attr.mq_curmsgs = 0;
@@ -59,6 +63,7 @@ void ControlCtxFree(control_ctx *self) {
 void feed(control_ctx *self, const char *buf) {
     static char tag_buf[30];
     static parser_result *tres;
+
     tres = NewParseResult();
     self->parser->parse_resp(self->parser, tres, buf);
 
@@ -66,25 +71,28 @@ void feed(control_ctx *self, const char *buf) {
         case HAYES_RES_STDRESP: {
             res_read_tag(tres, tag_buf);
             if (string_equal(tag_buf, self->inflight_tag)) {
-                //receive response of command sent most recently.
-                //It's downstream function, the send_timeout command, should free the res memory.
+                // receive response of command sent most recently.
+                // It's downstream function, the send_timeout command, should
+                // free the res memory.
                 mq_send(self->resp_q, (const char *)&tres,
                         sizeof(parser_result *), 0);
 
                 break;
             } else {
-                //response with standard structure but not match to the tag, may be an URC.
+                // response with standard structure but not match to the tag,
+                // may be an URC.
                 urc_hook hook = hash_table_lookup(self->urc_hooks, tag_buf);
                 if (hook != NULL) {
                     hook(buf);
                 }
-                //We do not know whether the hook will free the res or not, just free it again.
+                // We do not know whether the hook will free the res or not,
+                // just free it again.
                 ParseResultFree(tres);
                 break;
             }
         }
         case HAYES_RES_RESP: {
-            //plain response, use a special URC Hooks.
+            // plain response, use a special URC Hooks.
             urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
             if (hook != NULL) {
                 hook(buf);
@@ -93,7 +101,7 @@ void feed(control_ctx *self, const char *buf) {
             break;
         }
         default: {
-            //Unknown type, just forward to the downstream.
+            // Unknown type, just forward to the downstream.
             int status = mq_send(self->resp_q, (const char *)&tres,
                                  sizeof(parser_result *), 0);
             break;
@@ -102,11 +110,15 @@ void feed(control_ctx *self, const char *buf) {
 }
 
 void register_urc_hook(control_ctx *self, const char *urc, urc_hook hook) {
+    pthread_mutex_lock(&self->mu);
     hash_table_insert(self->urc_hooks, (void *)urc, (void *)hook);
+    pthread_mutex_unlock(&self->mu);
 }
 
 void unregister_urc_hook(control_ctx *self, const char *urc) {
+    pthread_mutex_lock(&self->mu);
     hash_table_remove(self->urc_hooks, (void *)urc);
+    pthread_mutex_unlock(&self->mu);
 }
 
 enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
@@ -121,27 +133,27 @@ enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
     }
 }
 
-
 enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
-                               uint16_t maxtimes, struct timespec *interval,uint16_t flag_idx) {
+                                     uint16_t maxtimes,
+                                     struct timespec *interval,
+                                     uint16_t flag_idx) {
     char flag = '0';
     char tagbuf[10];
     parser_result *tres;
-    
+
     while (1) {
         if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
 
         tres = send_timeout(ctx, command, 200);
-        if(res_read_nth(tres,tagbuf,flag_idx)!=-1)
-            if(*tagbuf == '1')
-                return CHAYES_OK;
+        if (res_read_nth(tres, tagbuf, flag_idx) != -1)
+            if (*tagbuf == '1') return CHAYES_OK;
 
         nanosleep(interval, NULL);
     }
 }
 
 void send_without_res(control_ctx *ctx, const char *command) {
-    parser_result * res = send_timeout(ctx,command,1000);
+    parser_result *res = send_timeout(ctx, command, 1000);
     ParseResultFree(res);
 }
 
@@ -149,6 +161,9 @@ parser_result *send_timeout(control_ctx *self, const char *command,
                             uint64_t timeout) {
     static mqd_t queue;
     static parser_result *tres;
+
+    parser_result *output = NULL;
+    pthread_mutex_lock(&self->mu);
 
     parser_result *cached_res = NULL;
 
@@ -185,42 +200,51 @@ parser_result *send_timeout(control_ctx *self, const char *command,
         if (rescode == -1) {
             chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
             self->inflight_tag[0] = 0;
-            return NULL;
+            output = NULL;
+            goto end_send;
         } else {
             switch (tres->type) {
                 case HAYES_RES_OK: {
                     self->inflight_tag[0] = 0;
                     if (cached_res != NULL) {
-                        //free OK response just received and return the real cached response.
+                        // free OK response just received and return the real
+                        // cached response.
                         ParseResultFree(tres);
-                        return cached_res;
+                        output = cached_res;
+                        goto end_send;
                     } else {
-                        //The command we sent only have OK response.Return it.
-                        return tres;
+                        // The command we sent only have OK response.Return it.
+                        output = tres;
+                        goto end_send;
                     }
                 }
                 case HAYES_RES_ERROR: {
                     self->inflight_tag[0] = 0;
-                    return tres;
+                    output = tres;
+                    goto end_send;
                 }
                 case HAYES_RES_EMPTY:
                 case HAYES_REQ: {
                     ParseResultFree(tres);
                     break;
                 }
-                // Actually, we can only get standard response here. 
+                // Actually, we can only get standard response here.
                 // After receiving standard response, we should wait for OK.
                 case HAYES_RES_RESP:
                 case HAYES_RES_STDRESP: {
                     cached_res = tres;
                     break;
                 }
-                //unknown response, just free it.
-                default:{
+                // unknown response, just free it.
+                default: {
                     ParseResultFree(tres);
                     break;
                 }
             }
         }
     }
+
+end_send:
+    pthread_mutex_unlock(&self->mu);
+    return output;
 }
