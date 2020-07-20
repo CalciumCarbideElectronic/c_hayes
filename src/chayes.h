@@ -7,9 +7,11 @@
 #ifdef UNITTEST
 #include "mqueue.h"
 #include "pthread.h"
+#include "time.h"
 #else
 #include "FreeRTOS_POSIX/mqueue.h"
 #include "FreeRTOS_POSIX/pthread.h"
+#include "FreeRTOS_POSIX/time.h"
 #endif
 
 #ifndef C_HAYES_H_
@@ -60,7 +62,7 @@ enum CHayesStatus try_until_flag_set(control_ctx* ctx, const char* command,
 void send_without_res(control_ctx* ctx, const char* command);
 
 parser_result* send_timeout(control_ctx* self, const char* command,
-                            uint64_t timeout);
+                            timespec * ddl);
 
 #endif
 

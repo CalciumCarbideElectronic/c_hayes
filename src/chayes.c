@@ -11,6 +11,7 @@
 #include "FreeRTOS_POSIX/fcntl.h"
 #include "FreeRTOS_POSIX/pthread.h"
 #include "FreeRTOS_POSIX/time.h"
+#include "FreeRTOS_POSIX/utils.h"
 #endif
 
 #include "c_core/src/compare-string.h"
@@ -19,7 +20,7 @@
 
 static parser_result *_unsafe_send_timeout(control_ctx *self,
                                            const char *command,
-                                           uint64_t timeout);
+                                           struct timespec *ddl);
 
 control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     static control_ctx singleton;
@@ -97,11 +98,13 @@ void feed(control_ctx *self, const char *buf) {
         }
         case HAYES_RES_RESP: {
             // plain response, use a special URC Hooks.
-            urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
-            if (hook != NULL) {
-                hook(buf);
-            }
-            ParseResultFree(tres);
+            mq_send(self->resp_q, (const char *)&tres, sizeof(parser_result *),
+                    0);
+            // urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
+            // if (hook != NULL) {
+            //     hook(buf);
+            // }
+            // ParseResultFree(tres);
             break;
         }
         default: {
@@ -140,10 +143,15 @@ void unregister_command_hook(control_ctx *self, const char *cmd) {
 enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
                                uint16_t maxtimes, struct timespec *interval) {
     enum result_type ttype;
+
+    struct timespec ddl;
+
     parser_result *tres;
     while (1) {
+        clock_gettime(CLOCK_REALTIME,&ddl);
+        UTILS_TimespecAdd(&ddl,interval,&ddl);
         if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
-        tres = send_timeout(ctx, command, 200);
+        tres = send_timeout(ctx, command, &ddl);
         if (tres->type == HAYES_RES_OK) return CHAYES_OK;
         nanosleep(interval, NULL);
     }
@@ -156,11 +164,14 @@ enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
     char flag = '0';
     char tagbuf[10];
     parser_result *tres;
+    struct timespec ddl;
 
     while (1) {
         if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
+        clock_gettime(CLOCK_REALTIME,&ddl);
+        UTILS_TimespecAdd(&ddl,interval,&ddl);
+        tres = send_timeout(ctx, command,&ddl);
 
-        tres = send_timeout(ctx, command, 200);
         if (res_read_nth(tres, tagbuf, flag_idx) != -1)
             if (*tagbuf == '1') return CHAYES_OK;
 
@@ -169,13 +180,15 @@ enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
 }
 
 void send_without_res(control_ctx *ctx, const char *command) {
-    parser_result *res = send_timeout(ctx, command, 1000);
+    static struct timespec ddl;
+    clock_gettime(CLOCK_REALTIME,&ddl);
+    UTILS_TimespecAddNanoseconds(&ddl,200000,&ddl);
+    parser_result *res = send_timeout(ctx, command, &ddl);
     ParseResultFree(res);
 }
 
 static parser_result *_unsafe_send_timeout(control_ctx *self,
-                                           const char *command,
-                                           uint64_t timeout) {
+                                           const char *command, struct timespec *ddl) {
     static mqd_t queue;
     static parser_result *tres;
 
@@ -195,24 +208,15 @@ static parser_result *_unsafe_send_timeout(control_ctx *self,
 
     // send AT command
 
-    self->shim.send(command, timeout);
+    self->shim.send(command, 200);
 
     // poll the resp queue
-    // 1. set time out
-    struct timespec ddl;
-    clock_gettime(CLOCK_REALTIME, &ddl);
-    ddl.tv_nsec += timeout * 1e6;
-    if (ddl.tv_nsec >= 1e9 - 1) {
-        long sec = ddl.tv_nsec / (long)1e9;
-        ddl.tv_nsec -= sec * (long)1e9;
-        ddl.tv_sec += sec;
-    }
 
     // 2.poll
 
     while (1) {
         int rescode = mq_timedreceive(self->resp_q, (char *)&tres,
-                                      sizeof(parser_result *), NULL, &ddl);
+                                      sizeof(parser_result *), NULL, ddl);
         if (rescode == -1) {
             chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
             self->inflight_tag[0] = 0;
@@ -268,10 +272,10 @@ end_send:
 }
 
 parser_result *send_timeout(control_ctx *self, const char *command,
-                            uint64_t timeout) {
+                            struct timespec *ddl) {
     parser_result *res;
     pthread_mutex_lock(&self->mu);
-    res = _unsafe_send_timeout(self, command, timeout);
+    res = _unsafe_send_timeout(self, command, ddl);
     pthread_mutex_unlock(&self->mu);
     return res;
 }
