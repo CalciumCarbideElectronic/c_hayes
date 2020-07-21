@@ -19,12 +19,17 @@ hayes_parser *NewHayesParser(hayes_checker *checker) {
 }
 
 void _free_malloced_list(ListEntry *list) {
+    ListIterator iter;
+    list_iterate(&list, &iter);
+        ListValue *next = list_iter_next(&iter);
+        free((range *)next);
+    }
     list_free(list);
 }
 
 void ParseResultFree(parser_result *res) {
     if (res == NULL) return;
-    if (res->resp != NULL) list_free(res->resp);
+    if (res->resp != NULL)  _free_malloced_list(res->resp);
     if (res->raw_buf != NULL) {
         free(res->raw_buf);
         res->raw_buf = NULL;
@@ -58,7 +63,7 @@ parser_result *NewParseResult() {
 void res_reset(parser_result *self) {
 	if(self==NULL) return;
     if (self->resp != NULL) {
-        list_free(self->resp);
+         _free_malloced_list(self->resp);
         self->resp = NULL;
     }
     if (self->raw_buf != NULL) {
