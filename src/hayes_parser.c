@@ -3,6 +3,8 @@
 #include "stdlib.h"
 #include "string.h"
 
+uint64_t inflight_res=0;
+
 hayes_parser *NewHayesParser(hayes_checker *checker) {
     hayes_parser *res = (hayes_parser *)malloc(sizeof(hayes_parser));
 
@@ -17,24 +19,18 @@ hayes_parser *NewHayesParser(hayes_checker *checker) {
 }
 
 void _free_malloced_list(ListEntry *list) {
-    ListIterator iter;
-    list_iterate(&list, &iter);
-    while (list_iter_has_more(&iter)) {
-        ListValue *next = list_iter_next(&iter);
-        free((range *)next);
-    }
-
     list_free(list);
 }
 
 void ParseResultFree(parser_result *res) {
-    if(res == NULL) return;
-    _free_malloced_list(res->resp);
+    if (res == NULL) return;
+    if (res->resp != NULL) list_free(res->resp);
     if (res->raw_buf != NULL) {
         free(res->raw_buf);
         res->raw_buf = NULL;
     }
     free(res);
+    inflight_res --;
     res = NULL;
 }
 
@@ -50,18 +46,25 @@ static void res_copy_buf(parser_result *res, const char *buf) {
 
 parser_result *NewParseResult() {
     parser_result *res = malloc(sizeof(parser_result));
+    if(res==NULL){
+    	chayes_debug("OOM");
+    }
     res->raw_buf = NULL;
     res->resp = NULL;
+    inflight_res ++;
     return res;
 }
 
 void res_reset(parser_result *self) {
-    _free_malloced_list(self->resp);
+	if(self==NULL) return;
+    if (self->resp != NULL) {
+        list_free(self->resp);
+        self->resp = NULL;
+    }
     if (self->raw_buf != NULL) {
         free(self->raw_buf);
         self->raw_buf = NULL;
     }
-    self->resp = NULL;
 }
 
 void default_parse_at_req(hayes_parser *self, parser_result *res,
@@ -97,7 +100,10 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
                 if (ch == 'E') {
                     fsm = 5;
                 }
-                fsm = (ch == '+') ? 3 : -1;
+
+                if ( ch=='+'){
+                	fsm = 3;
+                }
                 break;
             }
             case 3: {
@@ -113,12 +119,14 @@ void default_parse_at_req(hayes_parser *self, parser_result *res,
                 break;
             }
             case 5: {
-                if (ch == '\r') {
-                    res->tag.inf = cursor - 3;
-                    res->tag.sup = cursor;
-                    return;
-                }
+				res->tag.inf = cursor - 3;
+				res->tag.sup = cursor;
+				fsm=6;
             }
+            case 6:
+                if (ch == '\r') {
+                	return ;
+                }
         }
         cursor++;
     }
@@ -141,7 +149,6 @@ void default_parse_result(hayes_parser *self, parser_result *res,
         res->type = HAYES_RES_ERROR;
         return;
     }
-
 
     uint16_t fsm = 0;
     char ch;
@@ -203,21 +210,35 @@ void default_parse_result(hayes_parser *self, parser_result *res,
 
 int read_range(char *dst, range _ran, const char *buf) {
     if (_ran.inf == _ran.sup) return -1;
+    uint32_t buflen = strlen(buf);
+    if(_ran.inf<0||_ran.inf>buflen)return -1;
+    if(_ran.sup<0||_ran.sup>buflen)return -1;
+
 
     while (buf[_ran.inf] == ' ' || buf[_ran.inf] == '"') _ran.inf++;
+
+    if(_ran.inf<0||_ran.inf>buflen)return -1;
+
     while (buf[_ran.sup - 1] == ' ' || buf[_ran.sup - 1] == '"' ||
            buf[_ran.sup - 1] == '\r' || buf[_ran.sup - 1] == '\n')
         _ran.sup--;
+
+    if(_ran.sup<0||_ran.sup>buflen)return -1;
+
     memcpy(dst, buf + _ran.inf, _ran.sup - _ran.inf);
     dst[_ran.sup - _ran.inf] = '\0';
     return 0;
 }
 
 int res_read_nth(parser_result *ares, char *dst, uint32_t n) {
-    //TODO: when we try to read content in a HAYES_OK response, the list entry, ares->resp will be an invalid pointer which 
-    //lead to memory leak in list_nth_data function which treat only NULL pointer as empty. 
-    //We need to find why we get non-null value here.
-    if(ares->type!=HAYES_RES_STDRESP) return -1;
+    // TODO: when we try to read content in a HAYES_OK response, the list entry,
+    // ares->resp will be an invalid pointer which lead to memory leak in
+    // list_nth_data function which treat only NULL pointer as empty. We need to
+    // find why we get non-null value here.
+
+	if(ares==NULL) return -1;
+
+    if (ares->type != HAYES_RES_STDRESP) return -1;
 
     if (n >= list_length(ares->resp)) return -1;
 
@@ -226,5 +247,7 @@ int res_read_nth(parser_result *ares, char *dst, uint32_t n) {
 }
 
 int res_read_tag(parser_result *res, char *dst) {
-    return read_range(dst, res->tag, res->raw_buf);
+	if(res!=NULL)
+		return read_range(dst, res->tag, res->raw_buf);
+	return -1;
 }

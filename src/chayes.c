@@ -1,4 +1,5 @@
 #include "chayes.h"
+#include "utils.h"
 
 #ifdef UNITTEST
 #include "errno.h"
@@ -7,11 +8,12 @@
 #include "pthread.h"
 #include "time.h"
 #else
+#include "FreeRTOS.h"
+#include "task.h"
 #include "FreeRTOS_POSIX/errno.h"
 #include "FreeRTOS_POSIX/fcntl.h"
 #include "FreeRTOS_POSIX/pthread.h"
-#include "FreeRTOS_POSIX/time.h"
-#include "FreeRTOS_POSIX/utils.h"
+//#include "FreeRTOS_POSIX/time.h"
 #endif
 
 #include "c_core/src/compare-string.h"
@@ -19,7 +21,7 @@
 #include "string.h"
 
 static parser_result *_unsafe_send_timeout(control_ctx *self,
-                                           const char *command,
+                                           chayes_request req,
                                            struct timespec *ddl);
 
 control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
@@ -30,18 +32,19 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     if (init != 0) ControlCtxFree(&singleton);
 
     singleton.shim = shim;
+    singleton.sending = 0;
 
     singleton.urc_hooks = hash_table_new(string_hash, string_equal);
     singleton.command_hooks = hash_table_new(string_hash, string_equal);
 
     singleton.parser = NewHayesParser(checker);
 
-    pthread_mutex_init(&singleton.mu, NULL);
+    pthread_mutex_init(&(singleton.mu), NULL);
 
     struct mq_attr attr;
     attr.mq_curmsgs = 0;
     attr.mq_flags = 0;
-    attr.mq_maxmsg = 8;
+    attr.mq_maxmsg = 64;
     attr.mq_msgsize = sizeof(parser_result *);
 
     singleton.resp_q =
@@ -65,6 +68,9 @@ void ControlCtxFree(control_ctx *self) {
     mq_close(self->resp_q);
 }
 
+void hayes_async_message(parser_result * res){
+
+}
 void feed(control_ctx *self, const char *buf) {
     static char tag_buf[30];
     static parser_result *tres;
@@ -72,47 +78,24 @@ void feed(control_ctx *self, const char *buf) {
     tres = NewParseResult();
     self->parser->parse_resp(self->parser, tres, buf);
 
-    switch (tres->type) {
-        case HAYES_RES_STDRESP: {
-            res_read_tag(tres, tag_buf);
-            if (string_equal(tag_buf, self->inflight_tag)) {
-                // receive response of command sent most recently.
-                // It's downstream function, the send_timeout command, should
-                // free the res memory.
-                mq_send(self->resp_q, (const char *)&tres,
-                        sizeof(parser_result *), 0);
 
-                break;
-            } else {
-                // response with standard structure but not match to the tag,
-                // may be an URC.
-                urc_hook hook = hash_table_lookup(self->urc_hooks, tag_buf);
-                if (hook != NULL) {
-                    hook(buf);
-                }
-                // We do not know whether the hook will free the res or not,
-                // just free it again.
-                ParseResultFree(tres);
-                break;
-            }
-        }
-        case HAYES_RES_RESP: {
-            // plain response, use a special URC Hooks.
-            mq_send(self->resp_q, (const char *)&tres, sizeof(parser_result *),
-                    0);
-            // urc_hook hook = hash_table_lookup(self->urc_hooks, "plain");
-            // if (hook != NULL) {
-            //     hook(buf);
-            // }
-            // ParseResultFree(tres);
-            break;
-        }
-        default: {
-            // Unknown type, just forward to the downstream.
-            int status = mq_send(self->resp_q, (const char *)&tres,
-                                 sizeof(parser_result *), 0);
-            break;
-        }
+    if(self->sending==0){
+		hayes_async_message(tres);
+		ParseResultFree(tres);
+    } else{
+		switch (tres->type) {
+			case HAYES_RES_EMPTY:{
+				ParseResultFree(tres);
+				break;
+			}
+			default:
+			case HAYES_RES_STDRESP:
+			case HAYES_RES_RESP : {
+				mq_send(self->resp_q, (const char *)&tres,
+						sizeof(parser_result *), 0);
+				break;
+			}
+		}
     }
 }
 
@@ -140,7 +123,7 @@ void unregister_command_hook(control_ctx *self, const char *cmd) {
     pthread_mutex_unlock(&self->mu);
 }
 
-enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
+enum CHayesStatus try_until_ok(control_ctx *ctx,  chayes_request req,
                                uint16_t maxtimes, struct timespec *interval) {
     enum result_type ttype;
 
@@ -149,15 +132,21 @@ enum CHayesStatus try_until_ok(control_ctx *ctx, const char *command,
     parser_result *tres;
     while (1) {
         clock_gettime(CLOCK_REALTIME,&ddl);
-        UTILS_TimespecAdd(&ddl,interval,&ddl);
-        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
-        tres = send_timeout(ctx, command, &ddl);
-        if (tres->type == HAYES_RES_OK) return CHAYES_OK;
+        timeutil_add(&ddl,interval);
+        tres = send_timeout(ctx, req, &ddl);
+
+        if (tres->type == HAYES_RES_OK){
+			ParseResultFree(tres);
+        	return CHAYES_OK;
+        }
+
+		ParseResultFree(tres);
         nanosleep(interval, NULL);
+        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
     }
 }
 
-enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
+enum CHayesStatus try_until_flag_set(control_ctx *ctx, chayes_request req,
                                      uint16_t maxtimes,
                                      struct timespec *interval,
                                      uint16_t flag_idx) {
@@ -167,56 +156,55 @@ enum CHayesStatus try_until_flag_set(control_ctx *ctx, const char *command,
     struct timespec ddl;
 
     while (1) {
-        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
         clock_gettime(CLOCK_REALTIME,&ddl);
-        UTILS_TimespecAdd(&ddl,interval,&ddl);
-        tres = send_timeout(ctx, command,&ddl);
+        timeutil_add(&ddl,interval);
+        tres = send_timeout(ctx,  req ,&ddl);
+
 
         if (res_read_nth(tres, tagbuf, flag_idx) != -1)
-            if (*tagbuf == '1') return CHAYES_OK;
+		if (*tagbuf == '1') {
+				ParseResultFree(tres);
+            	return CHAYES_OK;
+		}
 
+        ParseResultFree(tres);
         nanosleep(interval, NULL);
+        if ((maxtimes--) == 0) return CHAYES_TIMEOUT;
     }
 }
 
-void send_without_res(control_ctx *ctx, const char *command) {
-    static struct timespec ddl;
+void send_without_res(control_ctx *ctx, chayes_request req) {
+    struct timespec ddl;
     clock_gettime(CLOCK_REALTIME,&ddl);
-    UTILS_TimespecAddNanoseconds(&ddl,200000,&ddl);
-    parser_result *res = send_timeout(ctx, command, &ddl);
+    timeutil_addnsec(&ddl,200000000);
+    parser_result *res = send_timeout(ctx,  req, &ddl);
     ParseResultFree(res);
 }
 
 static parser_result *_unsafe_send_timeout(control_ctx *self,
-                                           const char *command, struct timespec *ddl) {
-    static mqd_t queue;
-    static parser_result *tres;
-
+                                           chayes_request req, struct timespec *ddl) {
+    mqd_t queue;
+    parser_result *tres;
     parser_result *output = NULL;
-
     parser_result *cached_res = NULL;
 
     // set inflight_tag
-    tres = NewParseResult();
-    self->inflight_tag[0] = 0;
-    self->parser->parse_at_req(self->parser, tres, command);
-    if (res_read_tag(tres, self->inflight_tag) == -1) {
-        ParseResultFree(tres);
-        return NULL;
+    if(!req.no_tag){
+		tres = NewParseResult();
+		self->inflight_tag[0] = 0;
+		self->parser->parse_at_req(self->parser, tres, req.raw_cmd);
+		if (res_read_tag(tres, self->inflight_tag) == -1) {
+			ParseResultFree(tres);
+			return NULL;
+		}
+		ParseResultFree(tres);
     }
-    ParseResultFree(tres);
 
-    // send AT command
-
-    self->shim.send(command, 200);
-
-    // poll the resp queue
-
-    // 2.poll
+    self->shim.send(req.raw_cmd, 200);
+    self->sending = 1;
 
     while (1) {
-        int rescode = mq_timedreceive(self->resp_q, (char *)&tres,
-                                      sizeof(parser_result *), NULL, ddl);
+        int rescode =  mq_timedreceive(self->resp_q, (char*)&tres, sizeof(parser_result*), NULL,ddl);
         if (rescode == -1) {
             chayes_debug("mq_timedreceive() failed: %s\n", strerror(errno));
             self->inflight_tag[0] = 0;
@@ -241,12 +229,9 @@ static parser_result *_unsafe_send_timeout(control_ctx *self,
                 case HAYES_RES_ERROR: {
                     self->inflight_tag[0] = 0;
                     output = tres;
+                    if(cached_res!=NULL)
+                    	ParseResultFree(cached_res);
                     goto end_send;
-                }
-                case HAYES_RES_EMPTY:
-                case HAYES_REQ: {
-                    ParseResultFree(tres);
-                    break;
                 }
                 // Actually, we can only get standard response here.
                 // After receiving standard response, we should wait for OK.
@@ -255,10 +240,16 @@ static parser_result *_unsafe_send_timeout(control_ctx *self,
                     cmd_hook hook = hash_table_lookup(self->command_hooks,
                                                       self->inflight_tag);
                     if (hook != NULL) hook(tres->raw_buf);
+
+                    if(cached_res!=NULL){
+						ParseResultFree(cached_res);
+                    }
                     cached_res = tres;
                     break;
                 }
                 // unknown response, just free it.
+                case HAYES_RES_EMPTY:
+                case HAYES_REQ:
                 default: {
                     ParseResultFree(tres);
                     break;
@@ -268,14 +259,15 @@ static parser_result *_unsafe_send_timeout(control_ctx *self,
     }
 
 end_send:
+    self->sending = 0;
     return output;
 }
 
-parser_result *send_timeout(control_ctx *self, const char *command,
+parser_result *send_timeout(control_ctx *self,  chayes_request req,
                             struct timespec *ddl) {
     parser_result *res;
     pthread_mutex_lock(&self->mu);
-    res = _unsafe_send_timeout(self, command, ddl);
+    res = _unsafe_send_timeout(self, req , ddl);
     pthread_mutex_unlock(&self->mu);
     return res;
 }
