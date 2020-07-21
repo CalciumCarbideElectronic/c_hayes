@@ -21,6 +21,7 @@ hayes_parser *NewHayesParser(hayes_checker *checker) {
 void _free_malloced_list(ListEntry *list) {
     ListIterator iter;
     list_iterate(&list, &iter);
+    while (list_iter_has_more(&iter)) {
         ListValue *next = list_iter_next(&iter);
         free((range *)next);
     }
