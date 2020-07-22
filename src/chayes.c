@@ -50,7 +50,7 @@ control_ctx *NewControlCtx(syscall_shim shim, hayes_checker *checker) {
     singleton.resp_q =
         mq_open(CHAYES_QUEUE_NAME, O_RDWR | O_CREAT, 0777, &attr);
 
-    if (singleton.resp_q == -1) {
+    if (singleton.resp_q == NULL) {
         chayes_debug("mq_open failed, err: %s\n", strerror(errno));
     }
 
@@ -72,7 +72,6 @@ void hayes_async_message(parser_result * res){
 
 }
 void feed(control_ctx *self, const char *buf) {
-    static char tag_buf[30];
     static parser_result *tres;
 
     tres = NewParseResult();
@@ -125,10 +124,7 @@ void unregister_command_hook(control_ctx *self, const char *cmd) {
 
 enum CHayesStatus try_until_ok(control_ctx *ctx,  chayes_request req,
                                uint16_t maxtimes, struct timespec *interval) {
-    enum result_type ttype;
-
     struct timespec ddl;
-
     parser_result *tres;
     while (1) {
         clock_gettime(CLOCK_REALTIME,&ddl);
@@ -150,7 +146,6 @@ enum CHayesStatus try_until_flag_set(control_ctx *ctx, chayes_request req,
                                      uint16_t maxtimes,
                                      struct timespec *interval,
                                      uint16_t flag_idx) {
-    char flag = '0';
     char tagbuf[10];
     parser_result *tres;
     struct timespec ddl;
@@ -183,7 +178,6 @@ void send_without_res(control_ctx *ctx, chayes_request req) {
 
 static parser_result *_unsafe_send_timeout(control_ctx *self,
                                            chayes_request req, struct timespec *ddl) {
-    mqd_t queue;
     parser_result *tres;
     parser_result *output = NULL;
     parser_result *cached_res = NULL;
